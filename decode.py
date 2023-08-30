@@ -1,6 +1,7 @@
 import math
 import argparse
 import abc
+from dataclasses import dataclass
 
 
 # transmission:
@@ -15,6 +16,12 @@ import abc
 
 
 DUTY_CYCLE = 330
+
+
+@dataclass
+class DecodedSignal:
+    name: str
+    data: list[str]
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -33,40 +40,69 @@ def parse_arguments() -> argparse.Namespace:
 
 
 class Decoder(abc.ABC):
-    def decode(self, filename: str, options: argparse.Namespace) -> str:
+    def decode(self, filename: str, options: argparse.Namespace) -> list[DecodedSignal]:
         if not self._validate(filename, options):
             print(f'{filename} invalid')
             return ''
 
-        return self._decode(filename, options)
+        signals = self._extract_signals(filename)
+
+        return [
+            DecodedSignal(
+                name=signal_name,
+                data=self._decode(signal_data, options),
+            )
+            for signal_name, signal_data in signals.items()
+        ]
+
+    @abc.abstractmethod
+    def _extract_signals(self, filename: str) -> dict[str, list[int]]:
+        pass
 
     @abc.abstractmethod
     def _validate(self, filename: str, options: argparse.Namespace) -> bool:
         pass
 
-    @abc.abstractmethod
-    def _decode(self, filename: str, options: argparse.Namespace) -> list[str]:
-        pass
+    def _decode(self, raw_data: list[int], options: argparse.Namespace) -> list[str]:
+        binaries = []
+        binary = ''
 
-    def _normalize(self, first: str, second: str) -> (str, str):
-        pulse = int(first.split()[1])
-        space = int(second.split()[1])
+        i = 0
+        while i < len(raw_data) - 1:
+            first = raw_data[i]
+
+            if self._is_wait(first):
+                binaries.append(binary)
+                i += 1
+                continue
+
+            i += 1
+            second = raw_data[i]
+
+            if self._is_prologue(first, second):
+                binaries.append(binary)
+                binary = ''
+            else:
+                binary += self._decode_bit(first, second)
+
+        return [b for b in binaries if len(b) != 0]
+
+    def _normalize(self, pulse: int, space: int) -> (int, int):
         normalized_pulse = math.floor(pulse / DUTY_CYCLE)
         normalized_space = math.floor(space / DUTY_CYCLE)
 
         return normalized_pulse, normalized_space
 
-    def _is_prologue(self, first: str, second: str) -> bool:
-        pulse, space = self._normalize(first, second)
-        return pulse >= 3 and space >= 3
+    def _is_prologue(self, pulse: int, space: int) -> bool:
+        normalized_pulse, normalized_space = self._normalize(pulse, space)
+        return normalized_pulse >= 3 and normalized_space >= 3
 
-    def _is_wait(self, line: str) -> bool:
-        signal = line.split()
-        return signal[0] == 'timeout' or int(signal[1]) > 20 * DUTY_CYCLE
+    def _is_wait(self, signal: int) -> bool:
+        return signal > 20 * DUTY_CYCLE
 
-    def _decode_bit(self, first: str, second: str) -> str:
-        pulse, space = self._normalize(first, second)
-        return '0' if abs(pulse - space) < 2 else '1'
+    def _decode_bit(self, pulse: int, space: int) -> str:
+        normalized_pulse, normalized_space = self._normalize(pulse, space)
+        return '0' if abs(normalized_pulse - normalized_space) < 2 else '1'
 
 
 class LircDecoder(Decoder):
@@ -107,38 +143,18 @@ class LircDecoder(Decoder):
 
         return True
 
-    def _decode(self, filename: str, options: argparse.Namespace) -> list[str]:
-        binaries = []
-        binary = ''
-
+    def _extract_signals(self, filename: str) -> dict[str, list[int]]:
         with open(filename) as f:
-            lines = f.readlines()
-            i = 0
-            while i < len(lines):
-                first = lines[i]
-
-                if self._is_wait(first):
-                    binaries.append(binary)
-                    i += 1
-                    continue
-
-                i += 1
-                second = lines[i]
-
-                if self._is_prologue(first, second):
-                    binaries.append(binary)
-                    binary = ''
-                else:
-                    binary += self._decode_bit(first, second)
-
-        return [b for b in binaries if len(b) != 0]
+            return {filename: [int(line.split()[1]) for line in f]}
 
 
 class FlipperDecoder(Decoder):
     def _validate(self, filename: str, options: argparse.Namespace) -> bool:
         return True
 
-    def _decode(self, filename: str, options: argparse.Namespace) -> list[str]:
+    def _extract_signals(self, filename: str) -> dict[str, list[int]]:
+        signals = {}
+
         with open(filename) as f:
             line = f.readline()
             while line != '':
@@ -149,47 +165,13 @@ class FlipperDecoder(Decoder):
                 signal_type = f.readline().split(':')[1].strip()
                 signal_frequency = int(f.readline().split(':')[1].strip())
                 signal_duty_cycle = float(f.readline().split(':')[1].strip())
-                signal_data = f.readline().split(':')[1].strip().split()
+                signal_data = [int(x) for x in f.readline().split(':')[1].strip().split()]
 
-                if signal_name == options.signal_name:
-                    return self._decode_signal(signal_data, options)
+                signals[signal_name] = signal_data
 
                 line = f.readline()
 
-    def _decode_signal(self, lines: list[str], options: argparse.Namespace) -> str:
-        binaries = []
-        binary = ''
-
-        i = 0
-        while i < len(lines) - 1:
-            first = lines[i]
-
-            if self._is_wait(first):
-                binaries.append(binary)
-                i += 1
-                continue
-
-            i += 1
-            second = lines[i]
-
-            if self._is_prologue(first, second):
-                binaries.append(binary)
-                binary = ''
-            else:
-                binary += self._decode_bit(first, second)
-
-        return [b for b in binaries if len(b) != 0]
-
-    def _is_wait(self, signal: str) -> bool:
-        return int(signal) > 20 * DUTY_CYCLE
-
-    def _normalize(self, first: str, second: str) -> (str, str):
-        pulse = int(first)
-        space = int(second)
-        normalized_pulse = math.floor(pulse / DUTY_CYCLE)
-        normalized_space = math.floor(space / DUTY_CYCLE)
-
-        return normalized_pulse, normalized_space
+        return signals
 
 
 def to_hex(binary: str) -> str:
@@ -202,9 +184,10 @@ def to_hex(binary: str) -> str:
     return hex_str
 
 
-def print_decoded(decoded: [str], options: argparse.Namespace) -> None:
-    packets = decoded if options.binary else [to_hex(d) for d in decoded]
+def print_decoded(decoded: DecodedSignal, options: argparse.Namespace) -> None:
+    packets = decoded.data if options.binary else [to_hex(d) for d in decoded.data]
     last_packet = ''
+    print(decoded.name)
     print(f'packet  data')
     for i, packet in enumerate(packets):
         if options.doubles or packet != last_packet:
@@ -217,8 +200,7 @@ if __name__ == '__main__':
     decoder = LircDecoder() if options.format == 'lirc' else FlipperDecoder()
 
     for filename in options.filenames:
-        print(filename)
         decoded = decoder.decode(filename, options)
-        if len(decoded) != 0:
-            print_decoded(decoded, options)
-        print()
+        for decoded_signal in decoded:
+            print_decoded(decoded_signal, options)
+            print()
