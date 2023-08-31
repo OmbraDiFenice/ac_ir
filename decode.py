@@ -2,6 +2,7 @@ import math
 import argparse
 import abc
 from dataclasses import dataclass
+from textwrap import wrap
 
 
 # transmission:
@@ -175,11 +176,9 @@ class FlipperDecoder(Decoder):
 
 
 def to_hex(binary: str) -> str:
-    hex_str = ''
-    for i, hex_digit in enumerate(hex(int(binary, 2))[2:]):
-        hex_str += hex_digit
-        if (i + 1) % 2 == 0:
-            hex_str += ' '
+    binary_bytes = wrap(binary, 8)
+    hex_bytes = [f'{hex(int(b, 2))[2:]:02}' for b in binary_bytes]
+    return ' '.join(hex_bytes)
 
     return hex_str
 
