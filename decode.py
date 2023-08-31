@@ -35,6 +35,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-t', '--timeout-check', action='store_true', help='validate that each file contains only 1 timeout. Can be enabled when the file is expected to contain codes only for 1 keypress')
     parser.add_argument('-f', '--format', choices=['lirc', 'flipper'], default='lirc', help='input file format. If lirc the input files are expected to contain the dump from `mode2` program')
     parser.add_argument('-s', '--signal-name', help='name of the signal to decode. Only meaningful if --format=flipper')
+    parser.add_argument('--big-endian', action='store_true', help='interpret and show data as big endian bytes')
     parser.add_argument('filenames', nargs='*', help='list of files to decode. They should contain signal data according to the --format option')
 
     return parser.parse_args()
@@ -180,11 +181,23 @@ def to_hex(binary: str) -> str:
     hex_bytes = [f'{hex(int(b, 2))[2:]:02}' for b in binary_bytes]
     return ' '.join(hex_bytes)
 
-    return hex_str
+
+def to_big_endian(binary: str) -> str:
+    return ''.join([
+        b[::-1]
+        for b in wrap(binary, 8)
+    ])
 
 
 def print_decoded(decoded: DecodedSignal, options: argparse.Namespace) -> None:
-    packets = decoded.data if options.binary else [to_hex(d) for d in decoded.data]
+    packets = decoded.data
+
+    if options.big_endian:
+        packets = [to_big_endian(d) for d in packets]
+
+    if not options.binary:
+        packets = [to_hex(d) for d in packets]
+
     last_packet = ''
     print(decoded.name)
     print(f'packet  data')
