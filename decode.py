@@ -54,6 +54,10 @@ class Decoder(abc.ABC):
         decoded_signals = []
         for signal_name, signal_data in signals.items():
             bit_strings = self._decode_to_bit_string(signal_data, options)
+
+            if options.big_endian:
+                bit_strings = [to_big_endian(b) for b in bit_strings]
+
             decoded_signals.append(DecodedSignal(
                 name=signal_name,
                 str_data=bit_strings,
@@ -203,16 +207,16 @@ class FlipperDecoder(Decoder):
         return signals
 
 
-def to_hex(binary: str) -> str:
-    binary_bytes = wrap(binary, 8)
-    hex_bytes = [f'{hex(int(b, 2))[2:]:02}' for b in binary_bytes]
-    return ' '.join(hex_bytes)
-
-
-def to_big_endian(binary: str) -> str:
+def to_big_endian(bit_string: str) -> str:
     return ''.join([
         b[::-1]
-        for b in wrap(binary, 8)
+        for b in wrap(bit_string, 8)
+    ])
+
+
+def to_raw_bin(bit_string: str) -> str:
+    return ' '.join([
+        b for b in wrap(bit_string, 8)
     ])
 
 
@@ -220,7 +224,7 @@ def print_decoded(decoded: DecodedSignal, options: argparse.Namespace) -> None:
     packets = decoded.data
 
     if options.binary:
-        packets = decoded.str_data
+        packets = [to_raw_bin(b) for b in decoded.str_data]
     else:
         packets = [d.hex(' ') for d in packets]
 
