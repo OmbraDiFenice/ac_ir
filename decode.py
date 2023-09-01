@@ -22,7 +22,8 @@ DUTY_CYCLE = 330
 @dataclass
 class DecodedSignal:
     name: str
-    data: list[str]
+    data: list[bytearray]
+    str_data: list[str]
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -45,17 +46,20 @@ class Decoder(abc.ABC):
     def decode(self, filename: str, options: argparse.Namespace) -> list[DecodedSignal]:
         if not self._validate(filename, options):
             print(f'{filename} invalid')
-            return ''
+            return []
 
         signals = self._extract_signals(filename)
 
-        return [
-            DecodedSignal(
+        decoded_signals = []
+        for signal_name, signal_data in signals.items():
+            bit_strings = self._decode_to_bit_string(signal_data, options)
+            decoded_signals.append(DecodedSignal(
                 name=signal_name,
-                data=self._decode(signal_data, options),
-            )
-            for signal_name, signal_data in signals.items()
-        ]
+                str_data=bit_strings,
+                data=self._decode_to_bytearray(bit_strings, options),
+            ))
+
+        return decoded_signals
 
     @abc.abstractmethod
     def _extract_signals(self, filename: str) -> dict[str, list[int]]:
@@ -65,16 +69,16 @@ class Decoder(abc.ABC):
     def _validate(self, filename: str, options: argparse.Namespace) -> bool:
         pass
 
-    def _decode(self, raw_data: list[int], options: argparse.Namespace) -> list[str]:
-        binaries = []
-        binary = ''
+    def _decode_to_bit_string(self, raw_data: list[int], options: argparse.Namespace) -> list[str]:
+        packets = []
+        packet = ''
 
         i = 0
         while i < len(raw_data) - 1:
             first = raw_data[i]
 
             if self._is_wait(first):
-                binaries.append(binary)
+                packets.append(packet)
                 i += 1
                 continue
 
@@ -82,12 +86,34 @@ class Decoder(abc.ABC):
             second = raw_data[i]
 
             if self._is_prologue(first, second):
-                binaries.append(binary)
-                binary = ''
+                packets.append(packet)
+                packet = ''
             else:
-                binary += self._decode_bit(first, second)
+                packet += self._decode_bit(first, second)
 
-        return [b for b in binaries if len(b) != 0]
+        return packets
+
+    def _decode_to_bytearray(self, str_packets: list[str], options: argparse.Namespace) -> list[bytearray]:
+        bin_packets = []
+        for str_packet in str_packets:
+            binary = []
+            byte = 0
+            bit_len = 0
+            for bit in str_packet:
+                byte = (byte << 1) | (1 if bit == '1' else 0)
+                bit_len += 1
+                if bit_len == 8:
+                    binary.append(byte)
+                    byte = 0
+                    bit_len = 0
+            if bit_len < 8:
+                while bit_len < 8:
+                    byte = (byte << 1)
+                    bit_len += 1
+                binary.append(byte)
+            bin_packets.append(binary)
+
+        return [bytearray(b) for b in bin_packets if len(b) > 1]
 
     def _normalize(self, pulse: int, space: int) -> (int, int):
         normalized_pulse = math.floor(pulse / DUTY_CYCLE)
@@ -192,22 +218,21 @@ def to_big_endian(binary: str) -> str:
 def print_decoded(decoded: DecodedSignal, options: argparse.Namespace) -> None:
     packets = decoded.data
 
-    if options.big_endian:
-        packets = [to_big_endian(d) for d in packets]
-
-    if not options.binary:
-        packets = [to_hex(d) for d in packets]
+    if options.binary:
+        packets = decoded.str_data
+    else:
+        packets = [d.hex(' ') for d in packets]
 
     last_packet = ''
     print(decoded.name)
-    print(f'packet  data')
+    print('packet  data')
     for i, packet in enumerate(packets):
         if options.doubles or packet != last_packet:
             print(f'{i+1:02}/{len(packets):02}   {packet}')
             last_packet = packet
 
 
-if __name__ == '__main__':
+def main():
     options = parse_arguments()
     decoder = LircDecoder() if options.format == 'lirc' else FlipperDecoder()
 
@@ -216,3 +241,7 @@ if __name__ == '__main__':
         for decoded_signal in decoded:
             print_decoded(decoded_signal, options)
             print()
+
+
+if __name__ == '__main__':
+    main()
