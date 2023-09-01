@@ -3,6 +3,7 @@ import argparse
 import abc
 from dataclasses import dataclass
 from textwrap import wrap
+import struct
 
 
 # transmission:
@@ -35,7 +36,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-d', '--doubles', action='store_true', help='display duplicate consecutive packets')
     parser.add_argument('-t', '--timeout-check', action='store_true', help='validate that each file contains only 1 timeout. Can be enabled when the file is expected to contain codes only for 1 keypress')
     parser.add_argument('-f', '--format', choices=['lirc', 'flipper'], default='lirc', help='input file format. If lirc the input files are expected to contain the dump from `mode2` program')
-    parser.add_argument('-s', '--signal-name', help='name of the signal to decode. Only meaningful if --format=flipper')
+    parser.add_argument('-s', '--signal-name', help='name of the signal to decode. If --format=flipper the name comes from the flipper dump. If --format=lirc the name is the file name containing the mode2 dump')
     parser.add_argument('--big-endian', action='store_true', help='interpret and show data as big endian bytes')
     parser.add_argument('filenames', nargs='*', help='list of files to decode. They should contain signal data according to the --format option')
 
@@ -239,6 +240,8 @@ def main():
     for filename in options.filenames:
         decoded = decoder.decode(filename, options)
         for decoded_signal in decoded:
+            if options.signal_name is not None and options.signal_name != decoded_signal.name:
+                continue
             print_decoded(decoded_signal, options)
             print()
 
