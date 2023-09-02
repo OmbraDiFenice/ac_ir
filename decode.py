@@ -3,7 +3,6 @@ import argparse
 import abc
 from dataclasses import dataclass
 from textwrap import wrap
-import struct
 
 
 # transmission:
@@ -56,7 +55,7 @@ class Decoder(abc.ABC):
             bit_strings = self._decode_to_bit_string(signal_data, options)
 
             if options.big_endian:
-                bit_strings = [to_big_endian(b) for b in bit_strings]
+                bit_strings = [self._to_big_endian(b) for b in bit_strings]
 
             decoded_signals.append(DecodedSignal(
                 name=signal_name,
@@ -137,6 +136,12 @@ class Decoder(abc.ABC):
         normalized_pulse, normalized_space = self._normalize(pulse, space)
         return '0' if abs(normalized_pulse - normalized_space) < 2 else '1'
 
+    def _to_big_endian(self, bit_string: str) -> str:
+        return ''.join([
+            b[::-1]
+            for b in wrap(bit_string, 8)
+        ])
+
 
 class LircDecoder(Decoder):
     def _validate(self, filename: str, options: argparse.Namespace) -> bool:
@@ -205,13 +210,6 @@ class FlipperDecoder(Decoder):
                 line = f.readline()
 
         return signals
-
-
-def to_big_endian(bit_string: str) -> str:
-    return ''.join([
-        b[::-1]
-        for b in wrap(bit_string, 8)
-    ])
 
 
 def to_raw_bin(bit_string: str) -> str:
