@@ -22,8 +22,30 @@ DUTY_CYCLE = 330
 @dataclass
 class DecodedSignal:
     name: str
-    data: list[bytearray]
     str_data: list[str]
+
+    @property
+    def data(self) -> list[bytearray]:
+        bin_packets = []
+        for str_packet in self.str_data:
+            binary = []
+            byte = 0
+            bit_len = 0
+            for bit in str_packet:
+                byte = (byte << 1) | (1 if bit == '1' else 0)
+                bit_len += 1
+                if bit_len == 8:
+                    binary.append(byte)
+                    byte = 0
+                    bit_len = 0
+            if bit_len < 8:
+                while bit_len < 8:
+                    byte = (byte << 1)
+                    bit_len += 1
+                binary.append(byte)
+            bin_packets.append(binary)
+
+        return [bytearray(b) for b in bin_packets if len(b) > 1]
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -60,7 +82,6 @@ class Decoder(abc.ABC):
             decoded_signals.append(DecodedSignal(
                 name=signal_name,
                 str_data=bit_strings,
-                data=self._decode_to_bytearray(bit_strings, options),
             ))
 
         return decoded_signals
@@ -96,28 +117,6 @@ class Decoder(abc.ABC):
                 packet += self._decode_bit(first, second)
 
         return packets
-
-    def _decode_to_bytearray(self, str_packets: list[str], options: argparse.Namespace) -> list[bytearray]:
-        bin_packets = []
-        for str_packet in str_packets:
-            binary = []
-            byte = 0
-            bit_len = 0
-            for bit in str_packet:
-                byte = (byte << 1) | (1 if bit == '1' else 0)
-                bit_len += 1
-                if bit_len == 8:
-                    binary.append(byte)
-                    byte = 0
-                    bit_len = 0
-            if bit_len < 8:
-                while bit_len < 8:
-                    byte = (byte << 1)
-                    bit_len += 1
-                binary.append(byte)
-            bin_packets.append(binary)
-
-        return [bytearray(b) for b in bin_packets if len(b) > 1]
 
     def _normalize(self, pulse: int, space: int) -> (int, int):
         normalized_pulse = math.floor(pulse / DUTY_CYCLE)
