@@ -17,6 +17,8 @@ from textwrap import wrap
 
 
 DUTY_CYCLE = 330
+FIRST = 'first'
+SECOND = 'second'
 
 
 @dataclass
@@ -52,15 +54,23 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
-    parser.add_argument('-b', '--binary', action='store_true', help='display the decoded message as binary string')
-    parser.add_argument('-d', '--doubles', action='store_true', help='display duplicate consecutive packets')
-    parser.add_argument('-t', '--timeout-check', action='store_true', help='validate that each file contains only 1 timeout. Can be enabled when the file is expected to contain codes only for 1 keypress')
-    parser.add_argument('-f', '--format', choices=['lirc', 'flipper'], default='lirc', help='input file format. If lirc the input files are expected to contain the dump from `mode2` program')
-    parser.add_argument('-s', '--signal-name', help='name of the signal to decode. If --format=flipper the name comes from the flipper dump. If --format=lirc the name is the file name containing the mode2 dump')
-    parser.add_argument('--big-endian', action='store_true', help='interpret and show data as big endian bytes')
-    parser.add_argument('--raw', action='store_true', help='don\'t apply post processing to IR data, show exactly what is in the input file. If this is specified --big-endian doesn\'t have any effect')
     parser.add_argument('filenames', nargs='*', help='list of files to decode. They should contain signal data according to the --format option')
+
+    input_options = parser.add_argument_group('input decoding options')
+    input_options.add_argument('-t', '--timeout-check', action='store_true', help='validate that each file contains only 1 timeout. Can be enabled when the file is expected to contain codes only for 1 keypress')
+    input_options.add_argument('-f', '--format', choices=['lirc', 'flipper'], default='lirc', help='input file format. If lirc the input files are expected to contain the dump from `mode2` program')
+
+    display_options = parser.add_argument_group('Display option')
+    display_options.add_argument('-s', '--signal-name', help='limit the output to the signal with the given name. If --format=flipper the name comes from the flipper dump. If --format=lirc the name is the file name containing the mode2 dump. If not specified display all input signals')
+    display_options.add_argument('-b', '--binary', action='store_true', help='display the decoded message in binary, otherwise in hex. Note that in hex format the data is padded with 0s at the end if the number of bits of the packet is not multiple of 8')
+    display_options.add_argument('-d', '--doubles', action='store_true', help='display duplicate consecutive packets, hide them otherwise')
+
+    postprocessor_options = parser.add_argument_group('Post-processor options', 'These operations are applied to each packet in each signal')
+    postprocessor_options.add_argument('-E', '--big-endian', action='store_true', help='interpret and show data as big endian bytes')
+    postprocessor_options.add_argument('-H', '--header', type=int, default=8*8, help='length in bits of a constant header found at the beginning of each packet. Those bits are ignored and not displayed in the output. NOTE: this is applied before --remove-double-bit')
+    postprocessor_options.add_argument('-C', '--checksum-bits', type=int, default=18, help='number of bits of the checksum in the signal. The checksum is assumed to be at the end of the signal. --remove-double-bit will ignore the checksum bits')
+    postprocessor_options.add_argument('--remove-double-bit', choices=[FIRST, SECOND], help='only pick the first or second bit in any consecutive pair of 2 bits from the signal. This reduces the length of the signal by a factor of 2. It doesn\'t apply to the checksum bytes if specified, see --checksum-start-byte')
+    postprocessor_options.add_argument('--raw', action='store_true', help='skip any post-processing and display the raw data as decoded from the input file')
 
     return parser.parse_args()
 
@@ -211,32 +221,35 @@ class PostProcessor:
         )
 
     def _process_packet(self, packet: str, options: argparse.Namespace) -> str:
-        packet = self._skip_constant_prefix(packet)
+        packet = self._skip_constant_prefix(packet, options.header)
 
         if options.big_endian:
             packet = self._to_big_endian(packet)
 
-        packet, checksum = self._extract_checksum(packet)
-        packet = self._remove_double_bits(packet)
-        packet = self._rotate_pairs_of_bytes(packet)
+        packet, checksum = self._extract_checksum(packet, options.checksum_bits)
+
+        if options.remove_double_bit:
+            packet = self._remove_double_bits(packet, options.remove_double_bit)
+
+        #packet = self._rotate_pairs_of_bytes(packet)
 
         packet = packet + checksum
         return packet
 
-    def _extract_checksum(self, packet: str) -> tuple[str, str]:
+    def _extract_checksum(self, packet: str, checksum_bit_len: int) -> tuple[str, str]:
         """Returns a tuple where the first element is the packet data and the second the checksum bits"""
-        checksum_byte_len = 2
-        return packet[:-8*checksum_byte_len], packet[-8*checksum_byte_len-1:]
+        return packet[:len(packet)-checksum_bit_len], packet[len(packet)-checksum_bit_len:]
 
-    def _skip_constant_prefix(self, packet: str) -> str:
-        bytes_to_skip = 8
-        return packet[8*bytes_to_skip:]
+    def _skip_constant_prefix(self, packet: str, bits_to_skip: int) -> str:
+        return packet[bits_to_skip:]
 
     def _rotate_pairs_of_bytes(self, packet: str) -> str:
         return ''.join(b[1:]+b[0] for b in wrap(packet, 8))
 
-    def _remove_double_bits(self, packet: str) -> str:
-        return ''.join(bit for i, bit in enumerate(packet) if i % 2 == 0)
+    def _remove_double_bits(self, packet: str, bit_to_keep: str) -> str:
+        def keep(index: int) -> bool:
+            return (index % 2 == 0) if bit_to_keep == SECOND else (index % 2 == 1)
+        return ''.join(bit for i, bit in enumerate(packet) if keep(i))
 
     def _to_big_endian(self, packet: str) -> str:
         big_endian_packet = ''
