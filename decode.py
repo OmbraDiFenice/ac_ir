@@ -59,6 +59,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-f', '--format', choices=['lirc', 'flipper'], default='lirc', help='input file format. If lirc the input files are expected to contain the dump from `mode2` program')
     parser.add_argument('-s', '--signal-name', help='name of the signal to decode. If --format=flipper the name comes from the flipper dump. If --format=lirc the name is the file name containing the mode2 dump')
     parser.add_argument('--big-endian', action='store_true', help='interpret and show data as big endian bytes')
+    parser.add_argument('--raw', action='store_true', help='don\'t apply post processing to IR data, show exactly what is in the input file. If this is specified --big-endian doesn\'t have any effect')
     parser.add_argument('filenames', nargs='*', help='list of files to decode. They should contain signal data according to the --format option')
 
     return parser.parse_args()
@@ -75,9 +76,6 @@ class Decoder(abc.ABC):
         decoded_signals = []
         for signal_name, signal_data in signals.items():
             bit_strings = self._decode_to_bit_string(signal_data, options)
-
-            if options.big_endian:
-                bit_strings = [self._to_big_endian(b) for b in bit_strings]
 
             decoded_signals.append(DecodedSignal(
                 name=signal_name,
@@ -134,12 +132,6 @@ class Decoder(abc.ABC):
     def _decode_bit(self, pulse: int, space: int) -> str:
         normalized_pulse, normalized_space = self._normalize(pulse, space)
         return '0' if abs(normalized_pulse - normalized_space) < 2 else '1'
-
-    def _to_big_endian(self, bit_string: str) -> str:
-        return ''.join([
-            b[::-1]
-            for b in wrap(bit_string, 8)
-        ])
 
 
 class LircDecoder(Decoder):
@@ -211,6 +203,49 @@ class FlipperDecoder(Decoder):
         return signals
 
 
+class PostProcessor:
+    def process(self, signal: DecodedSignal, options: argparse.Namespace) -> DecodedSignal:
+        return DecodedSignal(
+            name=signal.name,
+            str_data=[self._process_packet(packet, options) for packet in signal.str_data]
+        )
+
+    def _process_packet(self, packet: str, options: argparse.Namespace) -> str:
+        packet = self._skip_constant_prefix(packet)
+
+        if options.big_endian:
+            packet = self._to_big_endian(packet)
+
+        packet, checksum = self._extract_checksum(packet)
+        packet = self._remove_double_bits(packet)
+        packet = self._rotate_pairs_of_bytes(packet)
+
+        packet = packet + checksum
+        return packet
+
+    def _extract_checksum(self, packet: str) -> tuple[str, str]:
+        """Returns a tuple where the first element is the packet data and the second the checksum bits"""
+        checksum_byte_len = 2
+        return packet[:-8*checksum_byte_len], packet[-8*checksum_byte_len-1:]
+
+    def _skip_constant_prefix(self, packet: str) -> str:
+        bytes_to_skip = 8
+        return packet[8*bytes_to_skip:]
+
+    def _rotate_pairs_of_bytes(self, packet: str) -> str:
+        return ''.join(b[1:]+b[0] for b in wrap(packet, 8))
+
+    def _remove_double_bits(self, packet: str) -> str:
+        return ''.join(bit for i, bit in enumerate(packet) if i % 2 == 0)
+
+    def _to_big_endian(self, packet: str) -> str:
+        big_endian_packet = ''
+        for byte in wrap(packet, 8):
+            big_endian_byte = byte[::-1]
+            big_endian_packet += big_endian_byte
+        return big_endian_packet
+
+
 def to_raw_bin(bit_string: str) -> str:
     return ' '.join([
         b for b in wrap(bit_string, 8)
@@ -236,6 +271,7 @@ def print_decoded(decoded: DecodedSignal, options: argparse.Namespace) -> None:
 
 def main():
     options = parse_arguments()
+    post_processor = PostProcessor()
     decoder = LircDecoder() if options.format == 'lirc' else FlipperDecoder()
 
     for filename in options.filenames:
@@ -243,7 +279,11 @@ def main():
         for decoded_signal in decoded:
             if options.signal_name is not None and options.signal_name != decoded_signal.name:
                 continue
-            print_decoded(decoded_signal, options)
+            if not options.raw:
+                processed_signal = post_processor.process(decoded_signal, options)
+                print_decoded(processed_signal, options)
+            else:
+                print_decoded(decoded_signal, options)
             print()
 
 
